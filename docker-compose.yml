@@ -4,6 +4,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
+        - CACHE_BUST=20260816-v3 # Força o rebuild total
         - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
         - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
     environment:

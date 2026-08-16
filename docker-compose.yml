@@ -4,18 +4,17 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - CACHE_BUST=20260816
-        - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
         - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
     environment:
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
-      - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
+      - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud
       - BACKEND_INTERNAL_URL=http://backend:8000
       - NEXT_PUBLIC_SELF_HOST=true
       - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
       - DATABASE_URL=postgresql://supoclip:supoclip_password@postgres:5432/supoclip
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-supoclip_jiop_secret_key_12345}
+      - BETTER_AUTH_SECRET=supoclip_jiop_secret_key_12345
       - BETTER_AUTH_URL=https://supoclip.jiop.cloud
       - BETTER_AUTH_TRUST_HOST=true
     depends_on:
@@ -24,13 +23,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    networks:
-      - default
-      - easypanel
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.supoclip.rule=Host(`supoclip.jiop.cloud`)
-      - traefik.http.services.supoclip.loadbalancer.server.port=3107
 
   backend:
     build:
@@ -66,15 +58,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    networks:
-      - default
-      - easypanel
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.supoclip-api.rule=Host(`supoclip.jiop.cloud`) && PathPrefix(`/api-backend`)
-      - traefik.http.middlewares.supoclip-api-strip.stripprefix.prefixes=/api-backend
-      - traefik.http.routers.supoclip-api.middlewares=supoclip-api-strip
-      - traefik.http.services.supoclip-api.loadbalancer.server.port=8000
 
   worker:
     build:
@@ -141,8 +124,3 @@ volumes:
     driver: local
   postgres_data:
     driver: local
-
-networks:
-  default:
-  easypanel:
-    external: true

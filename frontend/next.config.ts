@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
+  // Configuração para permitir uploads de vídeos maiores
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "500mb",
+    },
+  },
   async rewrites() {
     return [
       {

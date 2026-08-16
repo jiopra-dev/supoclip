@@ -4,12 +4,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
         - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
     environment:
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
       - BACKEND_INTERNAL_URL=http://backend:8000
       - NEXT_PUBLIC_SELF_HOST=true
       - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
@@ -73,6 +73,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    networks:
+      - default
+      - easypanel
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.supoclip-api.rule=Host(`supoclip.jiop.cloud`) && PathPrefix(`/api-backend`)
+      - traefik.http.middlewares.supoclip-api-strip.stripprefix.prefixes=/api-backend
+      - traefik.http.routers.supoclip-api.middlewares=supoclip-api-strip
+      - traefik.http.services.supoclip-api.loadbalancer.server.port=8000
 
   worker:
     build:

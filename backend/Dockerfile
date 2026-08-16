@@ -29,6 +29,9 @@ COPY pyproject.toml uv.lock* ./
 # Create virtual environment and install dependencies using uv sync
 RUN uv venv .venv && uv sync
 
+# Instalação do MediaPipe e OpenCV semântico para rastreamento facial suave
+RUN .venv/bin/pip install mediapipe==0.10.14 opencv-python-headless==4.9.0.80
+
 # Force update yt-dlp to the absolute latest version to handle YouTube API changes
 # Also install from git to get the very latest commits
 RUN uv pip install --upgrade --force-reinstall yt-dlp

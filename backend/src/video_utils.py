@@ -239,7 +239,8 @@ def format_transcript_for_analysis(transcript) -> List[str]:
     current_segment = []
     current_start = None
     segment_word_count = 0
-    max_words_per_segment = 8
+    # MELHORIA: Reduzido para 4 palavras máximas por segmento para a legenda encaixar no ecrã e ser dinâmica
+    max_words_per_segment = 4
 
     for word in words:
         if current_start is None:
@@ -614,12 +615,14 @@ def render_ranges_crossfade_ffmpeg(
 
     parts: List[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
+        # MELHORIA: fps=30 no início do trim para forçar framerate constante (evita travamentos)
         parts.append(
-            f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
-            f"fps={OUTPUT_FPS},format=yuv420p,setsar=1[v{idx}]"
+            f"[0:v]trim=start={start:.3f}:end={end:.3f},fps={OUTPUT_FPS},setpts=PTS-STARTPTS,"
+            f"format=yuv420p,setsar=1[v{idx}]"
         )
         if has_audio:
-            parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]")
+            # aresample=async=1 mantém o áudio sincronizado mesmo se frames de vídeo mudarem
+            parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,aresample=async=1[a{idx}]")
 
     cur_v = "[v0]"
     cumulative = durations[0]
@@ -646,7 +649,7 @@ def render_ranges_crossfade_ffmpeg(
         "ffmpeg", "-y", "-i", str(video_path),
         "-filter_complex", ";".join(parts),
         *map_args,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
     ]
     if has_audio:
         command += ["-c:a", "aac", "-b:a", "192k"]
@@ -663,7 +666,7 @@ def render_source_ranges_ffmpeg(video_path: Path, keep_ranges: List[Tuple[float,
         start, end = keep_ranges[0]
         command = [
             "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(video_path),
-            "-t", f"{end - start:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+            "-t", f"{end - start:.3f}", "-c:v", "libx264", "-preset", "medium",
             "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path),
         ]
@@ -679,10 +682,11 @@ def render_source_ranges_ffmpeg(video_path: Path, keep_ranges: List[Tuple[float,
     filter_parts: List[str] = []
     concat_inputs: List[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
-        filter_parts.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={OUTPUT_FPS}[v{idx}]")
+        # MELHORIA: Adicionado fps=30 no trim
+        filter_parts.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},fps={OUTPUT_FPS},setpts=PTS-STARTPTS[v{idx}]")
         concat_inputs.append(f"[v{idx}]")
         if has_audio:
-            filter_parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]")
+            filter_parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,aresample=async=1[a{idx}]")
             concat_inputs.append(f"[a{idx}]")
 
     if has_audio:
@@ -694,7 +698,7 @@ def render_source_ranges_ffmpeg(video_path: Path, keep_ranges: List[Tuple[float,
 
     command = [
         "ffmpeg", "-y", "-i", str(video_path), "-filter_complex", ";".join(filter_parts),
-        *map_args, "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
+        *map_args, "-c:v", "libx264", "-preset", "medium", "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
     ]
     if has_audio:
         command.extend(["-c:a", "aac", "-b:a", "192k"])
@@ -731,7 +735,7 @@ def hex_to_ass_color(value: Optional[str], fallback: str = "#FFFFFF", include_al
 
 
 def escape_ass_text(value: str) -> str:
-    # MELHORIA: Remove pontos, virgulas, exclamacoes e força tudo para Maiúsculas
+    # MELHORIA: Remove pontos, vírgulas, exclamações e força tudo para MAIÚSCULAS
     cleaned_value = re.sub(r'[.,!?;:"“”\'-]', '', str(value)).upper()
     return cleaned_value.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", " ").strip()
 
@@ -934,8 +938,8 @@ def build_assemblyai_ass_subtitles(
     shadow_px = max(2, font_px // 20) if template.get("shadow") else 0
     box_bord = max(outline_px + 2, font_px // 5)
     
-    # A posição um pouco mais para cima para centralizar
-    pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.75))
+    # Posição y na tela (geralmente lower third)
+    pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.70))
     est_text_height = int(font_px * 1.5)
     y_pos = get_safe_vertical_position(video_height, est_text_height, pos_y)
     font_name = ass_font_name(effective_font_family)
@@ -961,9 +965,7 @@ def build_assemblyai_ass_subtitles(
     requested_highlights = {normalize_token(w) for w in (highlight_words or []) if normalize_token(w)}
     emphasis_idx.update(i for i, w in enumerate(relevant_words) if normalize_token(str(w.get("text", ""))) in requested_highlights)
 
-    # MELHORIA: Quebra inteligente de linha para palavras curtas.
-    # Diminuído de 4 para 3 palavras longas ou 5 muito curtas por "linha". 
-    # O ASS lidará com a centralização.
+    # MELHORIA: Reduzido de 8 para 4 palavras máximas por ecrã (Obrigatório para a quebra em 2 linhas)
     chunk_size = 4
 
     header = f"""[Script Info]
@@ -975,7 +977,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},5,40,40,60,1
+Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},5,80,80,60,1
 {hook_style_block}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -993,8 +995,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return disp
 
     def active_span(disp: str) -> str:
-        # Animação POP exata do Opus Clip. Começa 25% maior e recua rapidamente para 10%.
-        tags = f"{font_tag}\\c{opus_green}\\fscx125\\fscy125\\t(0,100,\\fscx110\\fscy110)"
+        # Animação POP exata do Opus Clip. Começa 125% maior e recua rapidamente.
+        tags = f"{font_tag}\\c{opus_green}\\fscx125\\fscy125\\t(0,100,\\fscx100\\fscy100)"
         if word_box:
             tags += f"\\3c{box_color}\\bord{box_bord}\\shad0"
         return f"{{{tags}}}{disp}"
@@ -1025,8 +1027,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     gj = indices[local_j]
                     disp = render_text(gj, other)
                     
-                    # MELHORIA: Inserir a quebra de linha (\\N) no meio da chunk
-                    if local_j == len(chunk) // 2 and len(chunk) >= 3:
+                    # MELHORIA: Inserir a quebra de linha ANTES da 3ª palavra (Index 2)
+                    if local_j == 2 and len(chunk) >= 3:
                         parts.append("\\N")
                     
                     parts.append(active_span(disp) if local_j == local_i else idle_span(gj, disp))
@@ -1045,7 +1047,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 gj = indices[local_j]
                 disp = render_text(gj, word)
                 
-                if local_j == len(chunk) // 2 and len(chunk) >= 3:
+                if local_j == 2 and len(chunk) >= 3:
                     spans.append("\\N")
                     
                 color = emphasis_color if (enable_emphasis and gj in emphasis_idx) else primary
@@ -1431,8 +1433,8 @@ def build_crop_trajectory(
     width: int,
     crop_w: int,
     *,
-    deadzone_frac: float = 0.015,
-    smooth_time: float = 0.15, # MELHORIA: Reduzido drasticamente para 0.15 para fluidez absoluta 
+    deadzone_frac: float = 0.05,  # MELHORIA: Aumentado para 0.05 para ignorar movimentos de cabeça pequenos
+    smooth_time: float = 0.40,    # MELHORIA: Aumentado para 0.40 para evitar solavancos "secos"
     max_pan_speed_frac: float = 0.8,
 ) -> List[Tuple[float, int]]:
     if not track:
@@ -1513,7 +1515,8 @@ def build_crop_trajectory(
             keys.append((times[-1], int(round(eased[-1]))))
         return keys
 
-    tol = max(0.5, crop_w * 0.002)
+    # MELHORIA: Evitar que a lista de frames estoure o FFmpeg (Max 70 pontos)
+    tol = max(0.5, crop_w * 0.005)
     keys = simplify(tol)
     while len(keys) > 70:
         tol *= 1.2
@@ -1528,7 +1531,8 @@ def trajectory_has_movement(keys: List[Tuple[float, int]], crop_w: int) -> bool:
     if len(keys) < 2:
         return False
     xs = [x for _, x in keys]
-    return (max(xs) - min(xs)) >= max(8, crop_w * 0.04)
+    # MELHORIA: Requer mais movimento (5%) antes de fazer a câmera panear, evitando micro-ajustes
+    return (max(xs) - min(xs)) >= max(15, crop_w * 0.05)
 
 
 def build_smooth_pan_expression(keys: List[Tuple[float, int]]) -> str:
@@ -1771,7 +1775,7 @@ def burn_ass_subtitles_ffmpeg(input_path: Path, ass_path: Path, output_path: Pat
     video_filter = f"{subtitles_filter},setsar=1"
     command = [
         "ffmpeg", "-y", "-i", str(input_path), "-vf", video_filter,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path),
     ]
     return run_ffmpeg_command(command).returncode == 0

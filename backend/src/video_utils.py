@@ -1417,8 +1417,8 @@ def build_crop_trajectory(
     width: int,
     crop_w: int,
     *,
-    deadzone_frac: float = 0.015, # MELHORIA: Reduzido de 0.05 para seguir a face quase que imediatamente (Opus Style)
-    smooth_time: float = 0.35, # MELHORIA: Mola ajustada de 0.6 para 0.35 para uma perseguição fluida
+    deadzone_frac: float = 0.015,
+    smooth_time: float = 0.35,
     max_pan_speed_frac: float = 0.8,
 ) -> List[Tuple[float, int]]:
     if not track:
@@ -1499,17 +1499,17 @@ def build_crop_trajectory(
             keys.append((times[-1], int(round(eased[-1]))))
         return keys
 
-    # MELHORIA: Reduzindo limite de filtro linear para permitir mais de 350 pontos para curvas em vez de recortes robóticos
     tol = max(0.5, crop_w * 0.002)
     keys = simplify(tol)
-    while len(keys) > 350:
+    
+    # AQUI ESTÁ A CORREÇÃO: Voltámos de 350 para 70 para o FFmpeg não estoirar!
+    while len(keys) > 70:
         tol *= 1.2
         keys = simplify(tol)
 
     if keys and keys[0][0] > 0.0:
         keys[0] = (0.0, keys[0][1])
     return keys
-
 
 def trajectory_has_movement(keys: List[Tuple[float, int]], crop_w: int) -> bool:
     if len(keys) < 2:

@@ -13,8 +13,9 @@ services:
       - BACKEND_INTERNAL_URL=http://backend:8000
       - NEXT_PUBLIC_SELF_HOST=true
       - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
+      - BACKEND_AUTH_SECRET=supoclip_jiop_auth_token_987654321
       - DATABASE_URL=postgresql://supoclip:supoclip_password@postgres:5432/supoclip
-      - BETTER_AUTH_SECRET=supoclip_jiop_secret_key_12345
+      - BETTER_AUTH_SECRET=supoclip_jiop_secret_key_1234567890_secure
       - BETTER_AUTH_URL=https://supoclip.jiop.cloud
       - BETTER_AUTH_TRUST_HOST=true
     depends_on:
@@ -37,6 +38,7 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@postgres:5432/supoclip
+      - BACKEND_AUTH_SECRET=supoclip_jiop_auth_token_987654321
       - TEMP_DIR=/app/uploads
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -72,6 +74,7 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@postgres:5432/supoclip
+      - BACKEND_AUTH_SECRET=supoclip_jiop_auth_token_987654321
       - TEMP_DIR=/app/uploads
       - REDIS_HOST=redis
       - REDIS_PORT=6379

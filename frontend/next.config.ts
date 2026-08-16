@@ -2,30 +2,17 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  // Skip ESLint during builds (generated Prisma code causes lint errors)
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  // Skip TypeScript errors during builds for now
-  typescript: {
-    ignoreBuildErrors: false,
-  },
-  // Configuração para permitir uploads de vídeos maiores
+  eslint: { ignoreDuringBuilds: true },
+  typescript: { ignoreBuildErrors: false },
   experimental: {
     serverActions: {
-      bodySizeLimit: "500mb",
+      bodySizeLimit: "500mb", // ESSENCIAL para upload de vídeos
     },
   },
   async rewrites() {
     return [
-      {
-        source: "/js/script.js",
-        destination: "https://datafa.st/js/script.js",
-      },
-      {
-        source: "/api/events",
-        destination: "https://datafa.st/api/events",
-      },
+      { source: "/js/script.js", destination: "https://datafa.st/js/script.js" },
+      { source: "/api/events", destination: "https://datafa.st/api/events" },
     ];
   },
 };

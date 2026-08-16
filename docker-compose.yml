@@ -4,7 +4,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - CACHE_BUST=20260816-v3 # Força o rebuild total
+        - CACHE_BUST=20260816-v4
         - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
         - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
     environment:
@@ -81,7 +81,8 @@ services:
       - traefik.enable=true
       - traefik.http.routers.supoclip-api.rule=Host(`supoclip.jiop.cloud`) && PathPrefix(`/api-backend`)
       - traefik.http.middlewares.supoclip-api-strip.stripprefix.prefixes=/api-backend
-      - traefik.http.routers.supoclip-api.middlewares=supoclip-api-strip
+      # SOLUÇÃO AQUI: supoclip-limits adicionado à API
+      - traefik.http.routers.supoclip-api.middlewares=supoclip-api-strip,supoclip-limits
       - traefik.http.services.supoclip-api.loadbalancer.server.port=8000
 
   worker:

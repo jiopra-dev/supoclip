@@ -11,11 +11,12 @@ services:
       - NEXT_TELEMETRY_DISABLED=1
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       - BACKEND_INTERNAL_URL=http://backend:8000
-      - NEXT_PUBLIC_SELF_HOST=${SELF_HOST:-true}
+      - NEXT_PUBLIC_SELF_HOST=true
       - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
       - DATABASE_URL=postgresql://supoclip:supoclip_password@postgres:5432/supoclip
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-supoclip_jiop_secret_key_12345}
       - BETTER_AUTH_URL=https://supoclip.jiop.cloud
+      - BETTER_AUTH_TRUST_HOST=true
     depends_on:
       postgres:
         condition: service_healthy

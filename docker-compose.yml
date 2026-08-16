@@ -4,6 +4,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
+        - CACHE_BUST=20260816
         - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
         - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
     environment:
@@ -23,12 +24,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3107/api/auth/get-session"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
     networks:
       - default
       - easypanel
@@ -60,8 +55,6 @@ services:
       - SELF_HOST=true
       - CORS_ORIGINS=https://supoclip.jiop.cloud
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,8 +98,6 @@ services:
       - DEFAULT_PROCESSING_MODE=fast
       - SELF_HOST=true
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

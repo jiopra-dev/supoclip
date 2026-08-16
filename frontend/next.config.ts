@@ -12,6 +12,9 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "500mb",
     },
+    // 👇 ESTA É A LINHA QUE RESOLVE O ERRO DE 10MB DO PROXY
+    // 524288000 bytes = 500 MB
+    middlewareClientMaxBodySize: 524288000,
   },
   async rewrites() {
     return [
@@ -23,7 +26,6 @@ const nextConfig: NextConfig = {
         source: "/api/events",
         destination: "https://datafa.st/api/events",
       },
-      // 👇 ESSA É A MÁGICA: Redireciona o upload direto para o Backend Python!
       {
         source: "/api-backend/:path*",
         destination: "http://backend:8000/:path*",

@@ -349,7 +349,6 @@ def detect_faces_in_clip(video_path: Path, start_time: float, end_time: float) -
         mp_face_detection = None
         try:
             import mediapipe as mp
-            # Model 0 is better for close-up faces (standard for social media)
             mp_face_detection = mp.solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.4)
         except Exception:
             pass
@@ -926,7 +925,7 @@ def build_assemblyai_ass_subtitles(
     back_color = hex_to_ass_color(template.get("background_color"), "#00000080")
     box_color = hex_to_ass_color(template.get("word_box_color") or template.get("highlight_color"), "#00BF49")
 
-    # MELHORIA: Verde Limão exato estilo Opus Clip
+    # Verde Limão exato estilo Opus Clip
     opus_green = "&H14FF39&" 
 
     font_px = get_scaled_font_size(effective_font_size, video_width)
@@ -934,7 +933,8 @@ def build_assemblyai_ass_subtitles(
     outline_px = max(base_stroke, round(font_px * base_stroke / 26)) if (has_outline and base_stroke) else 0
     shadow_px = max(2, font_px // 20) if template.get("shadow") else 0
     box_bord = max(outline_px + 2, font_px // 5)
-    # MELHORIA: A posição um pouco mais para cima para centralizar igual Opus Clip
+    
+    # A posição um pouco mais para cima para centralizar
     pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.75))
     est_text_height = int(font_px * 1.5)
     y_pos = get_safe_vertical_position(video_height, est_text_height, pos_y)
@@ -961,19 +961,21 @@ def build_assemblyai_ass_subtitles(
     requested_highlights = {normalize_token(w) for w in (highlight_words or []) if normalize_token(w)}
     emphasis_idx.update(i for i, w in enumerate(relevant_words) if normalize_token(str(w.get("text", ""))) in requested_highlights)
 
-    max_words = max(1, int(template.get("max_words_per_line", 4) or 4))
-    chunk_size = max_words
+    # MELHORIA: Quebra inteligente de linha para palavras curtas.
+    # Diminuído de 4 para 3 palavras longas ou 5 muito curtas por "linha". 
+    # O ASS lidará com a centralização.
+    chunk_size = 4
 
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
-WrapStyle: 2
+WrapStyle: 1
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},5,60,60,60,1
+Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},5,40,40,60,1
 {hook_style_block}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -991,7 +993,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return disp
 
     def active_span(disp: str) -> str:
-        # MELHORIA: Animação POP exata do Opus Clip. Começa 25% maior e recua rapidamente para 10%.
+        # Animação POP exata do Opus Clip. Começa 25% maior e recua rapidamente para 10%.
         tags = f"{font_tag}\\c{opus_green}\\fscx125\\fscy125\\t(0,100,\\fscx110\\fscy110)"
         if word_box:
             tags += f"\\3c{box_color}\\bord{box_bord}\\shad0"
@@ -1006,6 +1008,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     events: List[str] = []
     total = len(relevant_words)
+    
     for chunk_start in range(0, total, chunk_size):
         chunk = relevant_words[chunk_start : chunk_start + chunk_size]
         indices = list(range(chunk_start, chunk_start + len(chunk)))
@@ -1021,8 +1024,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 for local_j, other in enumerate(chunk):
                     gj = indices[local_j]
                     disp = render_text(gj, other)
+                    
+                    # MELHORIA: Inserir a quebra de linha (\\N) no meio da chunk
+                    if local_j == len(chunk) // 2 and len(chunk) >= 3:
+                        parts.append("\\N")
+                    
                     parts.append(active_span(disp) if local_j == local_i else idle_span(gj, disp))
-                line = " ".join(parts)
+                    
+                line = " ".join(parts).replace(" \\N ", "\\N").replace(" \\N", "\\N").replace("\\N ", "\\N")
                 events.append(
                     f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{line_prefix}{line}"
                 )
@@ -1035,9 +1044,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             for local_j, word in enumerate(chunk):
                 gj = indices[local_j]
                 disp = render_text(gj, word)
+                
+                if local_j == len(chunk) // 2 and len(chunk) >= 3:
+                    spans.append("\\N")
+                    
                 color = emphasis_color if (enable_emphasis and gj in emphasis_idx) else primary
                 spans.append(f"{{{font_tag}\\c{color}}}{disp}")
-            chunk_text = " ".join(spans)
+                
+            chunk_text = " ".join(spans).replace(" \\N ", "\\N").replace(" \\N", "\\N").replace("\\N ", "\\N")
             events.append(f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{line_prefix}{chunk_text}")
 
     all_events = hook_events + events
@@ -1339,7 +1353,7 @@ def _scene_cuts_from_diffs(diffs: List[Tuple[float, float]]) -> List[float]:
 def analyze_vertical_clip(
     input_path: Path,
     *,
-    sample_fps: float = 24.0, # MELHORIA: Aumentado para 24 quadros por segundo para rastreamento suave da face
+    sample_fps: float = 24.0, 
     proc_width: int = 480,
 ) -> Tuple[List[Tuple[float, Optional[float], float]], List[float]]:
     width, height = ffprobe_video_size(input_path)
@@ -1418,7 +1432,7 @@ def build_crop_trajectory(
     crop_w: int,
     *,
     deadzone_frac: float = 0.015,
-    smooth_time: float = 0.35,
+    smooth_time: float = 0.15, # MELHORIA: Reduzido drasticamente para 0.15 para fluidez absoluta 
     max_pan_speed_frac: float = 0.8,
 ) -> List[Tuple[float, int]]:
     if not track:
@@ -1501,8 +1515,6 @@ def build_crop_trajectory(
 
     tol = max(0.5, crop_w * 0.002)
     keys = simplify(tol)
-    
-    # AQUI ESTÁ A CORREÇÃO: Voltámos de 350 para 70 para o FFmpeg não estoirar!
     while len(keys) > 70:
         tol *= 1.2
         keys = simplify(tol)
@@ -1510,6 +1522,7 @@ def build_crop_trajectory(
     if keys and keys[0][0] > 0.0:
         keys[0] = (0.0, keys[0][1])
     return keys
+
 
 def trajectory_has_movement(keys: List[Tuple[float, int]], crop_w: int) -> bool:
     if len(keys) < 2:

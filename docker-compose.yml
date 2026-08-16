@@ -4,12 +4,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
         - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
     environment:
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
-      - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud
+      - NEXT_PUBLIC_API_URL=https://supoclip.jiop.cloud/api-backend
       - BACKEND_INTERNAL_URL=http://backend:8000
       - NEXT_PUBLIC_SELF_HOST=true
       - NEXT_PUBLIC_APP_URL=https://supoclip.jiop.cloud
@@ -24,6 +24,15 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - default
+      - easypanel
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.supoclip.rule=Host(`supoclip.jiop.cloud`)
+      - traefik.http.services.supoclip.loadbalancer.server.port=3107
+      - traefik.http.middlewares.supoclip-limits.buffering.maxRequestBodyBytes=524288000
+      - traefik.http.routers.supoclip.middlewares=supoclip-limits
 
   backend:
     build:
@@ -34,6 +43,7 @@ services:
     volumes:
       - uploads:/app/uploads
       - clips:/app/clips
+      - /etc/supoclip/cookies.txt:/app/cookies.txt:ro
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -43,14 +53,15 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ASSEMBLY_AI_API_KEY=${ASSEMBLY_AI_API_KEY}
-      - LLM=${LLM:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LLM=${LLM:-gemini-1.5-flash}
       - DEFAULT_PROCESSING_MODE=fast
       - SELF_HOST=true
       - CORS_ORIGINS=https://supoclip.jiop.cloud
-      - GOOGLE_API_KEY=AQ.Ab8RN6LhGKdF5AvABhSlh-m9IR_FKe91jKU0PMr4EJMeDYoHFw
-      - YOUTUBE_DATA_API_KEY=AQ.Ab8RN6LhGKdF5AvABhSlh-m9IR_FKe91jKU0PMr4EJMeDYoHFw
+      - YTDLP_COOKIES_PATH=/app/cookies.txt
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,6 +73,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    networks:
+      - default
+      - easypanel
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.supoclip-api.rule=Host(`supoclip.jiop.cloud`) && PathPrefix(`/api-backend`)
+      - traefik.http.middlewares.supoclip-api-strip.stripprefix.prefixes=/api-backend
+      - traefik.http.routers.supoclip-api.middlewares=supoclip-api-strip
+      - traefik.http.services.supoclip-api.loadbalancer.server.port=8000
 
   worker:
     build:
@@ -72,6 +92,7 @@ services:
     volumes:
       - uploads:/app/uploads
       - clips:/app/clips
+      - /etc/supoclip/cookies.txt:/app/cookies.txt:ro
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -81,13 +102,14 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ASSEMBLY_AI_API_KEY=${ASSEMBLY_AI_API_KEY}
-      - LLM=${LLM:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - LLM=${LLM:-gemini-1.5-flash}
       - DEFAULT_PROCESSING_MODE=fast
       - SELF_HOST=true
-      - GOOGLE_API_KEY=AQ.Ab8RN6LhGKdF5AvABhSlh-m9IR_FKe91jKU0PMr4EJMeDYoHFw
-      - YOUTUBE_DATA_API_KEY=AQ.Ab8RN6LhGKdF5AvABhSlh-m9IR_FKe91jKU0PMr4EJMeDYoHFw
+      - YTDLP_COOKIES_PATH=/app/cookies.txt
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,3 +153,8 @@ volumes:
     driver: local
   postgres_data:
     driver: local
+
+networks:
+  default:
+  easypanel:
+    external: true

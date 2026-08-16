@@ -239,7 +239,6 @@ def format_transcript_for_analysis(transcript) -> List[str]:
     current_segment = []
     current_start = None
     segment_word_count = 0
-    # MELHORIA: Reduzido para 4 palavras máximas por segmento para a legenda encaixar no ecrã e ser dinâmica
     max_words_per_segment = 4
 
     for word in words:
@@ -615,13 +614,12 @@ def render_ranges_crossfade_ffmpeg(
 
     parts: List[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
-        # MELHORIA: fps=30 no início do trim para forçar framerate constante (evita travamentos)
+        # MELHORIA: Forçar FPS ANTES do trim para garantir cortes sem congelamento
         parts.append(
-            f"[0:v]trim=start={start:.3f}:end={end:.3f},fps={OUTPUT_FPS},setpts=PTS-STARTPTS,"
+            f"[0:v]fps={OUTPUT_FPS},trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
             f"format=yuv420p,setsar=1[v{idx}]"
         )
         if has_audio:
-            # aresample=async=1 mantém o áudio sincronizado mesmo se frames de vídeo mudarem
             parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,aresample=async=1[a{idx}]")
 
     cur_v = "[v0]"
@@ -682,8 +680,8 @@ def render_source_ranges_ffmpeg(video_path: Path, keep_ranges: List[Tuple[float,
     filter_parts: List[str] = []
     concat_inputs: List[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
-        # MELHORIA: Adicionado fps=30 no trim
-        filter_parts.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},fps={OUTPUT_FPS},setpts=PTS-STARTPTS[v{idx}]")
+        # MELHORIA: Forçar FPS ANTES do trim
+        filter_parts.append(f"[0:v]fps={OUTPUT_FPS},trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{idx}]")
         concat_inputs.append(f"[v{idx}]")
         if has_audio:
             filter_parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,aresample=async=1[a{idx}]")
@@ -938,8 +936,8 @@ def build_assemblyai_ass_subtitles(
     shadow_px = max(2, font_px // 20) if template.get("shadow") else 0
     box_bord = max(outline_px + 2, font_px // 5)
     
-    # Posição y na tela (geralmente lower third)
-    pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.70))
+    # Posição y na tela
+    pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.75))
     est_text_height = int(font_px * 1.5)
     y_pos = get_safe_vertical_position(video_height, est_text_height, pos_y)
     font_name = ass_font_name(effective_font_family)
@@ -965,7 +963,6 @@ def build_assemblyai_ass_subtitles(
     requested_highlights = {normalize_token(w) for w in (highlight_words or []) if normalize_token(w)}
     emphasis_idx.update(i for i, w in enumerate(relevant_words) if normalize_token(str(w.get("text", ""))) in requested_highlights)
 
-    # MELHORIA: Reduzido de 8 para 4 palavras máximas por ecrã (Obrigatório para a quebra em 2 linhas)
     chunk_size = 4
 
     header = f"""[Script Info]
@@ -1027,7 +1024,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     gj = indices[local_j]
                     disp = render_text(gj, other)
                     
-                    # MELHORIA: Inserir a quebra de linha ANTES da 3ª palavra (Index 2)
                     if local_j == 2 and len(chunk) >= 3:
                         parts.append("\\N")
                     
@@ -1433,9 +1429,11 @@ def build_crop_trajectory(
     width: int,
     crop_w: int,
     *,
-    deadzone_frac: float = 0.05,  # MELHORIA: Aumentado para 0.05 para ignorar movimentos de cabeça pequenos
-    smooth_time: float = 0.40,    # MELHORIA: Aumentado para 0.40 para evitar solavancos "secos"
-    max_pan_speed_frac: float = 0.8,
+    # MELHORIA: Zona morta aumentada para 8% (A câmara fica perfeitamente imóvel e nítida)
+    # E o smooth_time é rápido. Resulta num corte "saccádico" humano.
+    deadzone_frac: float = 0.08,  
+    smooth_time: float = 0.25,    
+    max_pan_speed_frac: float = 1.0,
 ) -> List[Tuple[float, int]]:
     if not track:
         return []
@@ -1515,10 +1513,10 @@ def build_crop_trajectory(
             keys.append((times[-1], int(round(eased[-1]))))
         return keys
 
-    # MELHORIA: Evitar que a lista de frames estoure o FFmpeg (Max 70 pontos)
-    tol = max(0.5, crop_w * 0.005)
+    # Limite seguro para o FFmpeg
+    tol = max(0.5, crop_w * 0.002)
     keys = simplify(tol)
-    while len(keys) > 70:
+    while len(keys) > 60:
         tol *= 1.2
         keys = simplify(tol)
 
@@ -1531,8 +1529,7 @@ def trajectory_has_movement(keys: List[Tuple[float, int]], crop_w: int) -> bool:
     if len(keys) < 2:
         return False
     xs = [x for _, x in keys]
-    # MELHORIA: Requer mais movimento (5%) antes de fazer a câmera panear, evitando micro-ajustes
-    return (max(xs) - min(xs)) >= max(15, crop_w * 0.05)
+    return (max(xs) - min(xs)) >= max(15, crop_w * 0.08)
 
 
 def build_smooth_pan_expression(keys: List[Tuple[float, int]]) -> str:

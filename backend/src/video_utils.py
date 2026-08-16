@@ -67,7 +67,6 @@ class VideoProcessor:
     def get_optimal_encoding_settings(
         self, target_quality: str = "high"
     ) -> Dict[str, Any]:
-        """Get optimal encoding settings for different quality levels."""
         settings = {
             "high": {
                 "codec": "libx264",
@@ -75,16 +74,8 @@ class VideoProcessor:
                 "audio_bitrate": "256k",
                 "preset": "slow",
                 "ffmpeg_params": [
-                    "-crf",
-                    "18",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-profile:v",
-                    "high",
-                    "-movflags",
-                    "+faststart",
-                    "-sws_flags",
-                    "lanczos",
+                    "-crf", "18", "-pix_fmt", "yuv420p", "-profile:v", "high",
+                    "-movflags", "+faststart", "-sws_flags", "lanczos",
                 ],
             },
             "medium": {
@@ -100,134 +91,68 @@ class VideoProcessor:
 
 
 def _prepare_audio_for_transcription(video_path: Path) -> Path:
-    """Extract a compact audio-only file before uploading to AssemblyAI."""
     audio_path = video_path.with_name(f"{video_path.stem}.assemblyai.mp3")
     if audio_path.exists() and audio_path.stat().st_size > 0:
         return audio_path
 
     command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(video_path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-b:a",
-        "64k",
-        str(audio_path),
+        "ffmpeg", "-y", "-i", str(video_path), "-vn", "-ac", "1",
+        "-ar", "16000", "-b:a", "64k", str(audio_path),
     ]
     try:
         result = run_ffmpeg_command(command, timeout=900)
     except FileNotFoundError:
-        logger.warning(
-            "ffmpeg is not available; falling back to source video for transcription"
-        )
         return video_path
 
     if result.returncode != 0 or not audio_path.exists() or audio_path.stat().st_size == 0:
-        logger.warning(
-            "Failed to extract transcription audio with ffmpeg; falling back to source video"
-        )
         return video_path
-
-    logger.info(
-        "Prepared transcription audio: %s (%.2f MB)",
-        audio_path,
-        audio_path.stat().st_size / (1024 * 1024),
-    )
     return audio_path
 
 
-def _submit_and_wait_for_assemblyai_transcript(
-    transcriber,
-    media_path: Path,
-    config_obj,
-    timeout_seconds: int,
-):
-    """Submit a transcript job and poll with a total timeout."""
+def _submit_and_wait_for_assemblyai_transcript(transcriber, media_path: Path, config_obj, timeout_seconds: int):
     submitted = transcriber.submit(str(media_path), config=config_obj)
     if not submitted.id:
         raise RuntimeError("AssemblyAI did not return a transcript ID")
 
-    logger.info("AssemblyAI transcript submitted: %s", submitted.id)
     deadline = time.monotonic() + timeout_seconds
     next_log_at = 0.0
 
     while True:
-        response = aai.api.get_transcript(
-            submitted._client.http_client,
-            submitted.id,
-        )
-        transcript = aai.Transcript.from_response(
-            client=submitted._client,
-            response=response,
-        )
+        response = aai.api.get_transcript(submitted._client.http_client, submitted.id)
+        transcript = aai.Transcript.from_response(client=submitted._client, response=response)
 
-        if transcript.status in (
-            aai.TranscriptStatus.completed,
-            aai.TranscriptStatus.error,
-        ):
+        if transcript.status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
             return transcript
 
         now = time.monotonic()
         if now >= deadline:
-            raise TimeoutError(
-                f"AssemblyAI transcript {submitted.id} did not complete within {timeout_seconds}s"
-            )
+            raise TimeoutError(f"AssemblyAI transcript {submitted.id} timed out.")
 
         if now >= next_log_at:
-            logger.info(
-                "AssemblyAI transcript %s still %s",
-                submitted.id,
-                transcript.status,
-            )
             next_log_at = now + 30
-
         time.sleep(aai.settings.polling_interval)
 
 
-def _assemblyai_speech_model_value(speech_model: str):
-    normalized = (speech_model or "universal").strip().lower()
-    if normalized in {"nano", "best", "universal", "universal-2", "universal-3-pro"}:
-        return aai.SpeechModel.universal
-    if normalized in {"slam-1", "slam_1"}:
-        return aai.SpeechModel.slam_1
-    return aai.SpeechModel.universal
-
-
 def get_video_transcript(video_path: Path, speech_model: str = "universal") -> str:
-    """Get transcript using AssemblyAI with word-level timing for precise subtitles."""
     logger.info(f"Getting transcript for: {video_path}")
-
     runtime_config = get_config()
     aai.settings.api_key = runtime_config.assembly_ai_api_key
     aai.settings.http_timeout = runtime_config.assembly_ai_http_timeout_seconds
     transcriber = aai.Transcriber()
 
-    config_obj = aai.TranscriptionConfig(
-        speaker_labels=True,
-        punctuate=True,
-        format_text=True,
-    )
+    config_obj = aai.TranscriptionConfig(speaker_labels=True, punctuate=True, format_text=True)
 
     try:
-        logger.info("Starting AssemblyAI transcription")
         transcription_media_path = _prepare_audio_for_transcription(video_path)
         transcript = None
         for attempt in range(1, 4):
             try:
                 transcript = _submit_and_wait_for_assemblyai_transcript(
-                    transcriber,
-                    transcription_media_path,
-                    config_obj,
+                    transcriber, transcription_media_path, config_obj,
                     runtime_config.assembly_ai_http_timeout_seconds,
                 )
                 break
             except (httpx.TimeoutException, TimeoutError):
-                logger.warning("AssemblyAI transcription timed out on attempt %s/3", attempt)
                 if attempt == 3:
                     raise
 
@@ -235,65 +160,46 @@ def get_video_transcript(video_path: Path, speech_model: str = "universal") -> s
             raise RuntimeError("AssemblyAI transcription did not return a transcript")
 
         if transcript.status == aai.TranscriptStatus.error:
-            logger.error(f"AssemblyAI transcription failed: {transcript.error}")
             raise Exception(f"Transcription failed: {transcript.error}")
 
         formatted_lines = format_transcript_for_analysis(transcript)
         cache_transcript_data(video_path, transcript)
 
         result = "\n".join(formatted_lines)
-        logger.info(f"Transcript formatted: {len(formatted_lines)} segments, {len(result)} chars")
         return result
-
     except Exception as e:
         logger.error(f"Error in transcription: {e}")
         raise
 
 
 def cache_transcript_data(video_path: Path, transcript) -> None:
-    """Cache AssemblyAI transcript data for subtitle generation."""
     cache_path = video_path.with_suffix(".transcript_cache.json")
-
-    words_data = []
-    if transcript.words:
-        words_data = [_serialize_transcript_word(word) for word in transcript.words]
+    words_data = [_serialize_transcript_word(word) for word in transcript.words] if transcript.words else []
 
     utterances_data = []
     if getattr(transcript, "utterances", None):
         utterances_data = [
             {
-                "text": utterance.text,
-                "start": utterance.start,
-                "end": utterance.end,
+                "text": utterance.text, "start": utterance.start, "end": utterance.end,
                 "speaker": getattr(utterance, "speaker", None),
-                "words": [
-                    _serialize_transcript_word(word)
-                    for word in getattr(utterance, "words", []) or []
-                ],
+                "words": [_serialize_transcript_word(word) for word in getattr(utterance, "words", []) or []],
             }
             for utterance in transcript.utterances
         ]
 
     cache_data = {
         "version": TRANSCRIPT_CACHE_SCHEMA_VERSION,
-        "words": words_data,
-        "utterances": utterances_data,
-        "text": transcript.text,
+        "words": words_data, "utterances": utterances_data, "text": transcript.text,
     }
 
     with open(cache_path, "w") as f:
         json.dump(cache_data, f)
 
-    logger.info(f"Cached {len(words_data)} words to {cache_path}")
-
 
 def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
-    """Load cached AssemblyAI transcript data."""
     cache_path = video_path.with_suffix(".transcript_cache.json")
-
     if not cache_path.exists():
         return None
-
     try:
         with open(cache_path, "r") as f:
             payload = json.load(f)
@@ -301,23 +207,19 @@ def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
                 payload["version"] = TRANSCRIPT_CACHE_SCHEMA_VERSION
                 payload.setdefault("utterances", [])
             return payload
-    except Exception as e:
-        logger.warning(f"Failed to load transcript cache: {e}")
+    except Exception:
         return None
 
 
 def _serialize_transcript_word(word) -> Dict[str, Any]:
     return {
-        "text": word.text,
-        "start": word.start,
-        "end": word.end,
+        "text": word.text, "start": word.start, "end": word.end,
         "confidence": word.confidence if hasattr(word, "confidence") else 1.0,
         "speaker": getattr(word, "speaker", None),
     }
 
 
 def format_transcript_for_analysis(transcript) -> List[str]:
-    """Format transcripts into readable timestamped segments for AI analysis."""
     utterances = getattr(transcript, "utterances", None) or []
     if utterances:
         formatted_lines = []
@@ -326,9 +228,7 @@ def format_transcript_for_analysis(transcript) -> List[str]:
             end_time = format_ms_to_timestamp(utterance.end)
             speaker = getattr(utterance, "speaker", None)
             speaker_prefix = f"Speaker {speaker}: " if speaker else ""
-            formatted_lines.append(
-                f"[{start_time} - {end_time}] {speaker_prefix}{utterance.text}"
-            )
+            formatted_lines.append(f"[{start_time} - {end_time}] {speaker_prefix}{utterance.text}")
         return formatted_lines
 
     formatted_lines = []
@@ -344,22 +244,14 @@ def format_transcript_for_analysis(transcript) -> List[str]:
     for word in words:
         if current_start is None:
             current_start = word.start
-
         current_segment.append(word.text)
         segment_word_count += 1
-
-        if (
-            segment_word_count >= max_words_per_segment
-            or word.text.endswith(".")
-            or word.text.endswith("!")
-            or word.text.endswith("?")
-        ):
+        if segment_word_count >= max_words_per_segment or word.text.endswith(".") or word.text.endswith("!") or word.text.endswith("?"):
             if current_segment:
                 start_time = format_ms_to_timestamp(current_start)
                 end_time = format_ms_to_timestamp(word.end)
                 text = " ".join(current_segment)
                 formatted_lines.append(f"[{start_time} - {end_time}] {text}")
-
             current_segment = []
             current_start = None
             segment_word_count = 0
@@ -369,7 +261,6 @@ def format_transcript_for_analysis(transcript) -> List[str]:
         end_time = format_ms_to_timestamp(words[-1].end)
         text = " ".join(current_segment)
         formatted_lines.append(f"[{start_time} - {end_time}] {text}")
-
     return formatted_lines
 
 
@@ -400,9 +291,7 @@ def get_subtitle_max_width(video_width: int) -> int:
     return max(200, video_width - (horizontal_padding * 2))
 
 
-def get_safe_vertical_position(
-    video_height: int, text_height: int, position_y: float
-) -> int:
+def get_safe_vertical_position(video_height: int, text_height: int, position_y: float) -> int:
     min_top_padding = max(40, int(video_height * 0.05))
     min_bottom_padding = max(120, int(video_height * 0.10))
     desired_y = int(video_height * position_y - text_height // 2)
@@ -410,12 +299,7 @@ def get_safe_vertical_position(
     return max(min_top_padding, min(desired_y, max_y))
 
 
-def detect_optimal_crop_region(
-    video_path: Path,
-    start_time: float,
-    end_time: float,
-    target_ratio: float = 9 / 16,
-) -> Tuple[int, int, int, int]:
+def detect_optimal_crop_region(video_path: Path, start_time: float, end_time: float, target_ratio: float = 9 / 16) -> Tuple[int, int, int, int]:
     try:
         original_width, original_height = ffprobe_video_size(video_path)
         if original_width / original_height > target_ratio:
@@ -443,10 +327,7 @@ def detect_optimal_crop_region(
             x_offset = (original_width - new_width) // 2 if original_width > new_width else 0
             y_offset = (original_height - new_height) // 2 if original_height > new_height else 0
 
-        x_offset = round_to_even(x_offset)
-        y_offset = round_to_even(y_offset)
-
-        return (x_offset, y_offset, new_width, new_height)
+        return (round_to_even(x_offset), round_to_even(y_offset), new_width, new_height)
 
     except Exception as e:
         logger.error(f"Error in crop detection: {e}")
@@ -457,23 +338,19 @@ def detect_optimal_crop_region(
         else:
             new_width = round_to_even(original_width)
             new_height = round_to_even(int(original_width / target_ratio))
-
         x_offset = round_to_even((original_width - new_width) // 2) if original_width > new_width else 0
         y_offset = round_to_even((original_height - new_height) // 2) if original_height > new_height else 0
         return (x_offset, y_offset, new_width, new_height)
 
 
-def detect_faces_in_clip(
-    video_path: Path, start_time: float, end_time: float
-) -> List[Tuple[int, int, int, float]]:
+def detect_faces_in_clip(video_path: Path, start_time: float, end_time: float) -> List[Tuple[int, int, int, float]]:
     face_centers = []
     try:
         mp_face_detection = None
         try:
             import mediapipe as mp
-            mp_face_detection = mp.solutions.face_detection.FaceDetection(
-                model_selection=0, min_detection_confidence=0.5
-            )
+            # Model 0 is better for close-up faces (standard for social media)
+            mp_face_detection = mp.solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.4)
         except Exception:
             pass
 
@@ -481,7 +358,6 @@ def detect_faces_in_clip(
         dnn_net = None
 
         duration = end_time - start_time
-        # MELHORIA 1: Aumentar a precisão da detecção fallback diminuindo o intervalo
         sample_interval = min(0.1, duration / 10) 
         sample_times = []
 
@@ -590,12 +466,7 @@ def filter_face_outliers(face_centers: List[Tuple[int, int, int, float]]) -> Lis
 
 
 def run_ffmpeg_command(command: List[str], timeout: int = 900) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         logger.error("Command failed: %s\n%s", " ".join(command), result.stderr[-4000:])
     return result
@@ -651,14 +522,9 @@ LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
 def build_final_video_encode_args(crf: int = FINAL_VIDEO_CRF, preset: str = FINAL_VIDEO_PRESET, fps: int = OUTPUT_FPS) -> List[str]:
     return [
-        "-c:v", "libx264",
-        "-preset", preset,
-        "-crf", str(crf),
-        "-pix_fmt", "yuv420p",
-        "-profile:v", "high",
-        "-level", "4.1",
-        "-r", str(fps),
-        "-x264-params", "keyint=120:min-keyint=30:scenecut=40",
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1",
+        "-r", str(fps), "-x264-params", "keyint=120:min-keyint=30:scenecut=40",
     ]
 
 
@@ -709,11 +575,8 @@ def emoji_rendering_supported() -> bool:
             fonts = FONTS_DIR if FONTS_DIR.exists() else None
             fragment = subtitles_filter_fragment(ass, fonts)
             command = [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "color=c=black:s=120x120:d=1",
-                "-vf", fragment,
-                "-frames:v", "1",
-                str(frame),
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=120x120:d=1",
+                "-vf", fragment, "-frames:v", "1", str(frame),
             ]
             if run_ffmpeg_command(command, timeout=60).returncode == 0 and frame.exists():
                 from PIL import Image
@@ -739,11 +602,7 @@ def crossfade_fade_for_ranges(keep_ranges: List[Tuple[float, float]]) -> float:
 
 
 def render_ranges_crossfade_ffmpeg(
-    video_path: Path,
-    keep_ranges: List[Tuple[float, float]],
-    output_path: Path,
-    has_audio: bool,
-    transition: str = "fade",
+    video_path: Path, keep_ranges: List[Tuple[float, float]], output_path: Path, has_audio: bool, transition: str = "fade",
 ) -> bool:
     keep_ranges = normalize_source_ranges(keep_ranges)
     n = len(keep_ranges)
@@ -756,15 +615,12 @@ def render_ranges_crossfade_ffmpeg(
 
     parts: List[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
-        # MELHORIA 2: Adicionado fps=OUTPUT_FPS para evitar travamentos de vídeo nos cortes (VFR)
         parts.append(
             f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
             f"fps={OUTPUT_FPS},format=yuv420p,setsar=1[v{idx}]"
         )
         if has_audio:
-            parts.append(
-                f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]"
-            )
+            parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]")
 
     cur_v = "[v0]"
     cumulative = durations[0]
@@ -791,8 +647,7 @@ def render_ranges_crossfade_ffmpeg(
         "ffmpeg", "-y", "-i", str(video_path),
         "-filter_complex", ";".join(parts),
         *map_args,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF),
-        "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
     ]
     if has_audio:
         command += ["-c:a", "aac", "-b:a", "192k"]
@@ -800,11 +655,7 @@ def render_ranges_crossfade_ffmpeg(
     return run_ffmpeg_command(command, timeout=1800).returncode == 0
 
 
-def render_source_ranges_ffmpeg(
-    video_path: Path,
-    keep_ranges: List[Tuple[float, float]],
-    output_path: Path,
-) -> bool:
+def render_source_ranges_ffmpeg(video_path: Path, keep_ranges: List[Tuple[float, float]], output_path: Path) -> bool:
     keep_ranges = normalize_source_ranges(keep_ranges)
     if not keep_ranges:
         return False
@@ -829,15 +680,10 @@ def render_source_ranges_ffmpeg(
     filter_parts: List[str] = []
     concat_inputs: List[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
-        # MELHORIA 2.1: fps=OUTPUT_FPS no fallback para evitar travamentos
-        filter_parts.append(
-            f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={OUTPUT_FPS}[v{idx}]"
-        )
+        filter_parts.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={OUTPUT_FPS}[v{idx}]")
         concat_inputs.append(f"[v{idx}]")
         if has_audio:
-            filter_parts.append(
-                f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]"
-            )
+            filter_parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]")
             concat_inputs.append(f"[a{idx}]")
 
     if has_audio:
@@ -848,11 +694,8 @@ def render_source_ranges_ffmpeg(
         map_args = ["-map", "[v]"]
 
     command = [
-        "ffmpeg", "-y", "-i", str(video_path),
-        "-filter_complex", ";".join(filter_parts),
-        *map_args,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF),
-        "-pix_fmt", "yuv420p",
+        "ffmpeg", "-y", "-i", str(video_path), "-filter_complex", ";".join(filter_parts),
+        *map_args, "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF), "-pix_fmt", "yuv420p",
     ]
     if has_audio:
         command.extend(["-c:a", "aac", "-b:a", "192k"])
@@ -889,7 +732,9 @@ def hex_to_ass_color(value: Optional[str], fallback: str = "#FFFFFF", include_al
 
 
 def escape_ass_text(value: str) -> str:
-    return str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", " ").strip()
+    # MELHORIA: Remove pontos, virgulas, exclamacoes e força tudo para Maiúsculas
+    cleaned_value = re.sub(r'[.,!?;:"“”\'-]', '', str(value)).upper()
+    return cleaned_value.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", " ").strip()
 
 
 def ass_font_name(font_family: Optional[str]) -> str:
@@ -915,8 +760,7 @@ def word_ends_sentence(text: str) -> bool:
 
 
 def extend_keep_ranges_to_sentence_boundary(
-    video_path: Path,
-    keep_ranges: List[Tuple[float, float]],
+    video_path: Path, keep_ranges: List[Tuple[float, float]],
     max_extension_seconds: float = CLIP_END_SENTENCE_EXTENSION_SECONDS,
     padding_seconds: float = CLIP_END_PADDING_SECONDS,
 ) -> List[Tuple[float, float]]:
@@ -940,19 +784,14 @@ def extend_keep_ranges_to_sentence_boundary(
     if cap_end <= last_end:
         return normalized
 
-    nearby_words = get_absolute_words_in_range(
-        transcript_data, max(0.0, last_end - 6.0), cap_end
-    )
+    nearby_words = get_absolute_words_in_range(transcript_data, max(0.0, last_end - 6.0), cap_end)
     if not nearby_words:
         return normalized
 
     boundary_words = [w for w in nearby_words if float(w["start"]) <= last_end + 0.05]
     last_boundary_word = boundary_words[-1] if boundary_words else None
-    if (
-        last_boundary_word
-        and float(last_boundary_word["end"]) <= last_end + 0.05
-        and word_ends_sentence(str(last_boundary_word.get("text", "")))
-    ):
+    if (last_boundary_word and float(last_boundary_word["end"]) <= last_end + 0.05
+            and word_ends_sentence(str(last_boundary_word.get("text", "")))):
         return normalized
 
     extended_end = last_end
@@ -994,16 +833,10 @@ def _balance_title_lines(words: List[str], max_chars: int) -> List[str]:
 
 
 def build_hook_title_ass(
-    hook_title: str,
-    template: Dict[str, Any],
-    video_width: int,
-    video_height: int,
-    output_duration: float,
-    font_name: str,
-    caption_font_px: int,
+    hook_title: str, template: Dict[str, Any], video_width: int, video_height: int,
+    output_duration: float, font_name: str, caption_font_px: int,
 ) -> Tuple[str, List[str]]:
-    uppercase = bool(template.get("uppercase"))
-    title_text = hook_title.upper() if uppercase else hook_title
+    title_text = hook_title.upper()
 
     primary = hex_to_ass_color(template.get("font_color"), "#FFFFFF")
     highlight = hex_to_ass_color(template.get("emphasis_color") or template.get("highlight_color"), "#FFE000")
@@ -1053,31 +886,16 @@ def build_hook_title_ass(
     entrance = "\\fad(160,240)"
     if template.get("word_pop", True):
         entrance += "\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)"
-    events = [
-        f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
-        f"{{{entrance}}}{text}"
-    ]
+    events = [f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,{{{entrance}}}{text}"]
     return style_line, events
 
 
 def build_assemblyai_ass_subtitles(
-    video_path: Path,
-    clip_start: float,
-    clip_end: float,
-    video_width: int,
-    video_height: int,
-    output_ass_path: Path,
-    font_family: Optional[str] = None,
-    font_size: Optional[int] = None,
-    font_color: Optional[str] = None,
-    caption_template: str = "default",
-    keep_ranges: Optional[List[Tuple[float, float]]] = None,
-    caption_cues: Optional[List[Dict[str, Any]]] = None,
-    hook_title: Optional[str] = None,
-    include_captions: bool = True,
-    caption_words: Optional[List[Dict[str, Any]]] = None,
-    position_y_override: Optional[float] = None,
-    highlight_words: Optional[List[str]] = None,
+    video_path: Path, clip_start: float, clip_end: float, video_width: int, video_height: int,
+    output_ass_path: Path, font_family: Optional[str] = None, font_size: Optional[int] = None,
+    font_color: Optional[str] = None, caption_template: str = "default", keep_ranges: Optional[List[Tuple[float, float]]] = None,
+    caption_cues: Optional[List[Dict[str, Any]]] = None, hook_title: Optional[str] = None, include_captions: bool = True,
+    caption_words: Optional[List[Dict[str, Any]]] = None, position_y_override: Optional[float] = None, highlight_words: Optional[List[str]] = None,
 ) -> bool:
     transcript_data = load_cached_transcript_data(video_path)
 
@@ -1096,9 +914,7 @@ def build_assemblyai_ass_subtitles(
     if not relevant_words and not hook_title:
         return False
 
-    uppercase = bool(template.get("uppercase"))
     enable_emoji = bool(template.get("emoji", True)) and emoji_rendering_supported()
-    word_pop = bool(template.get("word_pop", True))
     word_box = bool(template.get("word_box"))
     glow = bool(template.get("glow"))
     has_outline = template.get("stroke_color") is not None
@@ -1110,15 +926,16 @@ def build_assemblyai_ass_subtitles(
     back_color = hex_to_ass_color(template.get("background_color"), "#00000080")
     box_color = hex_to_ass_color(template.get("word_box_color") or template.get("highlight_color"), "#00BF49")
 
-    # MELHORIA 3: OPUS CLIP VERDE LIMÃO HARDCODED NA PALAVRA ATIVA
-    opus_green = "&H00FF00&" 
+    # MELHORIA: Verde Limão exato estilo Opus Clip
+    opus_green = "&H14FF39&" 
 
     font_px = get_scaled_font_size(effective_font_size, video_width)
     base_stroke = int(template.get("stroke_width", 3) or 0)
     outline_px = max(base_stroke, round(font_px * base_stroke / 26)) if (has_outline and base_stroke) else 0
     shadow_px = max(2, font_px // 20) if template.get("shadow") else 0
     box_bord = max(outline_px + 2, font_px // 5)
-    pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.80))
+    # MELHORIA: A posição um pouco mais para cima para centralizar igual Opus Clip
+    pos_y = float(position_y_override) if position_y_override is not None else float(template.get("position_y", 0.75))
     est_text_height = int(font_px * 1.5)
     y_pos = get_safe_vertical_position(video_height, est_text_height, pos_y)
     font_name = ass_font_name(effective_font_family)
@@ -1167,8 +984,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     def render_text(global_idx: int, word: Dict[str, Any]) -> str:
         text = str(word.get("text", ""))
-        if uppercase:
-            text = text.upper()
         disp = escape_ass_text(text)
         emoji = emoji_by_idx.get(global_idx)
         if emoji:
@@ -1176,22 +991,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return disp
 
     def active_span(disp: str) -> str:
-        # MELHORIA 3: Palavra ativa ganha cor verde e fica 15% maior (\fscx115\fscy115) para dar o pop
-        tags = f"{font_tag}\\c{opus_green}\\fscx115\\fscy115"
+        # MELHORIA: Animação POP exata do Opus Clip. Começa 25% maior e recua rapidamente para 10%.
+        tags = f"{font_tag}\\c{opus_green}\\fscx125\\fscy125\\t(0,100,\\fscx110\\fscy110)"
         if word_box:
             tags += f"\\3c{box_color}\\bord{box_bord}\\shad0"
         return f"{{{tags}}}{disp}"
 
     def idle_span(global_idx: int, disp: str) -> str:
-        # Garante que as palavras inativas voltam para 100% do tamanho
         color = emphasis_color if (enable_emphasis and global_idx in emphasis_idx) else primary
         tags = f"{font_tag}\\c{color}\\fscx100\\fscy100"
         if word_box:
             tags += f"\\3c{outline}\\bord{outline_px}\\shad{shadow_px}"
         return f"{{{tags}}}{disp}"
-
-    # Desabilitamos o bounce na linha inteira para focar apenas na palavra ativa
-    line_entrance = ""
 
     events: List[str] = []
     total = len(relevant_words)
@@ -1227,14 +1038,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 color = emphasis_color if (enable_emphasis and gj in emphasis_idx) else primary
                 spans.append(f"{{{font_tag}\\c{color}}}{disp}")
             chunk_text = " ".join(spans)
-            effect = ""
-            if animation == "fade":
-                effect = "{\\fad(120,120)}"
-            elif animation == "pop":
-                effect = "{\\fscx88\\fscy88\\t(0,130,\\fscx106\\fscy106)\\t(130,250,\\fscx100\\fscy100)}"
-            events.append(
-                f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{line_prefix}{effect}{chunk_text}"
-            )
+            events.append(f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{line_prefix}{chunk_text}")
 
     all_events = hook_events + events
     output_ass_path.write_text(header + "\n".join(all_events) + "\n", encoding="utf-8")
@@ -1468,7 +1272,7 @@ def _open_face_detectors():
     mp_face = None
     try:
         import mediapipe as mp
-        mp_face = mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+        mp_face = mp.solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.4)
     except Exception:
         pass
     haar = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -1535,7 +1339,7 @@ def _scene_cuts_from_diffs(diffs: List[Tuple[float, float]]) -> List[float]:
 def analyze_vertical_clip(
     input_path: Path,
     *,
-    sample_fps: float = 12.0,  # MELHORIA 1: Aumentado para 12fps para fluidez extrema
+    sample_fps: float = 24.0, # MELHORIA: Aumentado para 24 quadros por segundo para rastreamento suave da face
     proc_width: int = 480,
 ) -> Tuple[List[Tuple[float, Optional[float], float]], List[float]]:
     width, height = ffprobe_video_size(input_path)
@@ -1613,9 +1417,9 @@ def build_crop_trajectory(
     width: int,
     crop_w: int,
     *,
-    deadzone_frac: float = 0.05,
-    smooth_time: float = 0.6,  # MELHORIA 1.1: Mola mais ágil = acompanhamento mais real do rosto
-    max_pan_speed_frac: float = 0.5,
+    deadzone_frac: float = 0.015, # MELHORIA: Reduzido de 0.05 para seguir a face quase que imediatamente (Opus Style)
+    smooth_time: float = 0.35, # MELHORIA: Mola ajustada de 0.6 para 0.35 para uma perseguição fluida
+    max_pan_speed_frac: float = 0.8,
 ) -> List[Tuple[float, int]]:
     if not track:
         return []
@@ -1695,10 +1499,11 @@ def build_crop_trajectory(
             keys.append((times[-1], int(round(eased[-1]))))
         return keys
 
-    tol = max(1.5, crop_w * 0.006)
+    # MELHORIA: Reduzindo limite de filtro linear para permitir mais de 350 pontos para curvas em vez de recortes robóticos
+    tol = max(0.5, crop_w * 0.002)
     keys = simplify(tol)
-    while len(keys) > 90:
-        tol *= 1.5
+    while len(keys) > 350:
+        tol *= 1.2
         keys = simplify(tol)
 
     if keys and keys[0][0] > 0.0:
